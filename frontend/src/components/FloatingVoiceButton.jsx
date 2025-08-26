@@ -7,6 +7,22 @@ const FloatingVoiceButton = ({ categories, user, onExpenseAdded }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [isListening, setIsListening] = useState(false);
 
+  // Handle expense addition while keeping modal open
+  const handleExpenseAdded = (newExpense) => {
+    // Call the parent callback to update expenses
+    if (onExpenseAdded) {
+      onExpenseAdded(newExpense);
+    }
+    
+    // Refresh notifications after adding expense
+    if (window.refreshNotifications) {
+      window.refreshNotifications();
+    }
+    
+    // Don't close the modal - let the user decide when to close
+    // The modal will stay open for adding more expenses
+  };
+
   return (
     <>
       {/* Floating Voice Button */}
@@ -41,7 +57,7 @@ const FloatingVoiceButton = ({ categories, user, onExpenseAdded }) => {
       <VoiceExpenseModal
         isOpen={isOpen}
         onClose={() => setIsOpen(false)}
-        onExpenseAdded={onExpenseAdded}
+        onExpenseAdded={handleExpenseAdded}
         categories={categories}
         user={user}
       />

@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react';
 import { auth } from '../firebase-config';
-import { Plus, TrendingUp, TrendingDown, Search, Edit3, Trash2, X, Mic, Calendar, DollarSign, Tag } from 'lucide-react';
+import { Plus, TrendingUp, TrendingDown, Search, Edit3, Trash2, X, Calendar, DollarSign, Tag, Mic } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import * as api from '../services/api.js';
-import VoiceExpenseModal from './VoiceExpenseModal';
+
 import FloatingVoiceButton from './FloatingVoiceButton';
+import VoiceExpenseModal from './VoiceExpenseModal';
 
 export default function Expenses() {
   const [user, setUser] = useState(null);
@@ -13,6 +14,7 @@ export default function Expenses() {
   const [showAddExpense, setShowAddExpense] = useState(false);
   const [showAddCategory, setShowAddCategory] = useState(false);
   const [showVoiceExpense, setShowVoiceExpense] = useState(false);
+
   const [showCategoryDetail, setShowCategoryDetail] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState(null);
   const [showEditExpense, setShowEditExpense] = useState(false);
@@ -71,6 +73,15 @@ export default function Expenses() {
     try {
       setIsLoading(true);
       
+      // Ensure we have a valid user ID
+      if (!uid) {
+        console.error('No user ID provided');
+        setMessage({ type: 'error', text: 'User not authenticated' });
+        return;
+      }
+
+      console.log('Loading data for user:', uid);
+      
       const [expensesData, categoriesData] = await Promise.all([
         api.getExpenses(uid).catch((error) => {
           console.error('Error fetching expenses:', error);
@@ -82,11 +93,14 @@ export default function Expenses() {
         })
       ]);
       
-      setExpenses(expensesData);
-      setCategories(categoriesData);
+      console.log('Expenses loaded:', expensesData);
+      console.log('Categories loaded:', categoriesData);
+      
+      setExpenses(expensesData || []);
+      setCategories(categoriesData || []);
     } catch (error) {
       console.error('Error loading data:', error);
-      setMessage({ type: 'error', text: 'Failed to load data' });
+      setMessage({ type: 'error', text: 'Failed to load data: ' + error.message });
     } finally {
       setIsLoading(false);
     }
@@ -99,14 +113,22 @@ export default function Expenses() {
     }
 
     try {
-      const newExpense = await api.addExpense({
+      const newExpense = {
         uid: user.uid,
-        title: expenseForm.title,
+        title: expenseForm.title.trim(),
         amount: parseFloat(expenseForm.amount),
-        category: expenseForm.category
-      });
+        category: expenseForm.category.trim(),
+        date: expenseForm.date
+      };
 
-      setExpenses(prev => [newExpense.expense, ...prev]);
+      console.log('Adding expense:', newExpense);
+      const savedExpense = await api.addExpense(newExpense);
+      console.log('Expense saved:', savedExpense);
+      
+      // Handle the response properly
+      const expenseToAdd = savedExpense.expense || savedExpense;
+      setExpenses(prev => [expenseToAdd, ...prev]);
+      
       setExpenseForm({
         title: '',
         amount: '',
@@ -115,31 +137,15 @@ export default function Expenses() {
         description: ''
       });
       setShowAddExpense(false);
-      
-      // Check for budget warnings after adding expense
-      const category = categories.find(cat => cat.name === expenseForm.category);
-      if (category && category.budgetLimit > 0) {
-        const newTotalSpent = getCategorySpent(category.name) + parseFloat(expenseForm.amount);
-        const percentage = (newTotalSpent / category.budgetLimit) * 100;
-        
-        if (percentage >= 100) {
-          setMessage({ 
-            type: 'warning', 
-            text: `Budget exceeded for ${category.name}! You've spent ₹${newTotalSpent.toFixed(2)} out of ₹${category.budgetLimit.toFixed(2)} budget.` 
-          });
-        } else if (percentage >= 50) {
-          setMessage({ 
-            type: 'warning', 
-            text: `Budget ${percentage.toFixed(1)}% used for ${category.name}. Consider monitoring your spending.` 
-          });
-        } else {
-          setMessage({ type: 'success', text: 'Expense added successfully!' });
-        }
-      } else {
-        setMessage({ type: 'success', text: 'Expense added successfully!' });
+      setMessage({ type: 'success', text: 'Expense added successfully!' });
+
+      // Refresh notifications after adding expense
+      if (window.refreshNotifications) {
+        window.refreshNotifications();
       }
     } catch (error) {
-      setMessage({ type: 'error', text: error.message });
+      console.error('Error adding expense:', error);
+      setMessage({ type: 'error', text: 'Failed to add expense: ' + error.message });
     }
   };
 
@@ -150,15 +156,22 @@ export default function Expenses() {
     }
 
     try {
-      const newCategory = await api.addCategory({
+      const newCategory = {
         uid: user.uid,
-        name: categoryForm.name,
+        name: categoryForm.name.trim(),
         color: categoryForm.color,
         budgetLimit: parseFloat(categoryForm.budgetLimit),
         icon: categoryForm.icon
-      });
+      };
 
-      setCategories(prev => [...prev, newCategory.category]);
+      console.log('Adding category:', newCategory);
+      const savedCategory = await api.addCategory(newCategory);
+      console.log('Category saved:', savedCategory);
+      
+      // Handle the response properly
+      const categoryToAdd = savedCategory.category || savedCategory;
+      setCategories(prev => [categoryToAdd, ...prev]);
+      
       setCategoryForm({
         name: '',
         color: '#3B82F6',
@@ -167,24 +180,35 @@ export default function Expenses() {
       });
       setShowAddCategory(false);
       setMessage({ type: 'success', text: 'Category added successfully!' });
+
+      // Refresh notifications after adding category
+      if (window.refreshNotifications) {
+        window.refreshNotifications();
+      }
     } catch (error) {
-      setMessage({ type: 'error', text: error.message });
+      console.error('Error adding category:', error);
+      setMessage({ type: 'error', text: 'Failed to add category: ' + error.message });
     }
   };
 
   const handleDeleteCategory = async (categoryId) => {
-    if (window.confirm('Are you sure you want to delete this category? This will also delete all associated expenses.')) {
-      try {
-        await api.deleteCategory(categoryId);
-        setCategories(prev => prev.filter(category => category._id !== categoryId));
-        setExpenses(prev => prev.filter(expense => {
-          const category = categories.find(cat => cat._id === categoryId);
-          return expense.category !== category?.name;
-        }));
-        setMessage({ type: 'success', text: 'Category deleted successfully!' });
-      } catch (error) {
-        setMessage({ type: 'error', text: error.message });
+    if (!window.confirm('Are you sure you want to delete this category? This will also delete all expenses in this category.')) {
+      return;
+    }
+
+    try {
+      await api.deleteCategory(categoryId);
+      setCategories(prev => prev.filter(cat => cat._id !== categoryId));
+      setExpenses(prev => prev.filter(exp => exp.category !== selectedCategory?.name));
+      setMessage({ type: 'success', text: 'Category and related expenses deleted successfully!' });
+
+      // Refresh notifications after deleting category
+      if (window.refreshNotifications) {
+        window.refreshNotifications();
       }
+    } catch (error) {
+      console.error('Error deleting category:', error);
+      setMessage({ type: 'error', text: 'Failed to delete category. Please try again.' });
     }
   };
 
@@ -214,23 +238,25 @@ export default function Expenses() {
   };
 
   const handleDeleteExpense = async (expenseId) => {
-    if (window.confirm('Are you sure you want to delete this expense?')) {
-      try {
-        // Delete from database first
-        await api.deleteExpense(expenseId);
-        
-        // Remove from expenses array
-        setExpenses(prev => prev.filter(exp => exp._id !== expenseId));
-        setMessage({ type: 'success', text: 'Expense deleted successfully!' });
-        
-        // Close modal if it's open
-        if (showCategoryDetail) {
-          closeCategoryDetail();
-        }
-      } catch (error) {
-        console.error('Error deleting expense:', error);
-        setMessage({ type: 'error', text: error.message || 'Failed to delete expense' });
+    if (!window.confirm('Are you sure you want to delete this expense?')) {
+      return;
+    }
+
+    try {
+      console.log('Deleting expense:', expenseId);
+      await api.deleteExpense(expenseId);
+      console.log('Expense deleted successfully');
+      
+      setExpenses(prev => prev.filter(exp => exp._id !== expenseId));
+      setMessage({ type: 'success', text: 'Expense deleted successfully!' });
+
+      // Refresh notifications after deleting expense
+      if (window.refreshNotifications) {
+        window.refreshNotifications();
       }
+    } catch (error) {
+      console.error('Error deleting expense:', error);
+      setMessage({ type: 'error', text: 'Failed to delete expense: ' + error.message });
     }
   };
 
@@ -241,27 +267,34 @@ export default function Expenses() {
     }
 
     try {
-      // Update in database first
-      const updatedExpense = await api.updateExpense(editingExpense._id, {
-        title: editingExpense.title,
+      const updateData = {
+        title: editingExpense.title.trim(),
         amount: parseFloat(editingExpense.amount),
-        category: editingExpense.category,
+        category: editingExpense.category.trim(),
         date: editingExpense.date
-      });
+      };
 
-      // Update in expenses array
+      console.log('Updating expense:', editingExpense._id, updateData);
+      const updatedExpense = await api.updateExpense(editingExpense._id, updateData);
+      console.log('Expense updated:', updatedExpense);
+
+      // Handle the response properly
+      const expenseToUpdate = updatedExpense.expense || updatedExpense;
       setExpenses(prev => prev.map(exp => 
-        exp._id === editingExpense._id 
-          ? { ...exp, ...editingExpense, amount: parseFloat(editingExpense.amount) }
-          : exp
+        exp._id === editingExpense._id ? expenseToUpdate : exp
       ));
-
+      
       setShowEditExpense(false);
       setEditingExpense(null);
       setMessage({ type: 'success', text: 'Expense updated successfully!' });
+
+      // Refresh notifications after updating expense
+      if (window.refreshNotifications) {
+        window.refreshNotifications();
+      }
     } catch (error) {
       console.error('Error updating expense:', error);
-      setMessage({ type: 'error', text: error.message || 'Failed to update expense' });
+      setMessage({ type: 'error', text: 'Failed to update expense: ' + error.message });
     }
   };
 
@@ -463,18 +496,18 @@ export default function Expenses() {
                 <span>Add Category</span>
               </button>
               <button
-                onClick={() => setShowVoiceExpense(true)}
-                className="px-4 py-2 bg-purple-600 text-white font-medium rounded-xl hover:bg-purple-700 transition-colors duration-200 flex items-center space-x-2"
-              >
-                <Mic className="w-4 h-4" />
-                <span>Voice Expense</span>
-              </button>
-              <button
                 onClick={() => setShowAddExpense(true)}
                 className="px-4 py-2 bg-blue-600 text-white font-medium rounded-xl hover:bg-blue-700 transition-colors duration-200 flex items-center space-x-2"
               >
                 <Plus className="w-4 h-4" />
                 <span>Add Expense</span>
+              </button>
+              <button
+                onClick={() => setShowVoiceExpense(true)}
+                className="px-4 py-2 bg-purple-600 text-white font-medium rounded-xl hover:bg-purple-700 transition-colors duration-200 flex items-center space-x-2"
+              >
+                <Mic className="w-4 h-4" />
+                <span>Voice Expense</span>
               </button>
             </div>
           </div>

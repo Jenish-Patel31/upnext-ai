@@ -7,6 +7,7 @@ import userRoutes from './routes/userRoutes.js';
 import expenseRoutes from './routes/expenseRoutes.js';
 import planRoutes from './routes/planRoutes.js';
 import categoryRoutes from './routes/categoryRoutes.js';
+import expenseParsingRoutes from './routes/expenseParsingRoutes.js';
 import mongoose from 'mongoose';
 import dotenv from 'dotenv';
 dotenv.config();
@@ -29,6 +30,7 @@ app.use('/api/users', userRoutes);
 app.use('/api/expenses', expenseRoutes);
 app.use('/api/plans', planRoutes);
 app.use('/api/categories', categoryRoutes);
+app.use('/api/expense-parsing', expenseParsingRoutes);
 
 // Test endpoint to verify server and database status
 app.get('/api/health', async (req, res) => {
