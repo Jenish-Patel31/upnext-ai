@@ -136,7 +136,7 @@ UpNext AI isn't just another financial app—it's a **revolutionary AI-powered f
 ### **Quick Start**
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/upnext-ai.git
+git clone https://github.com/Jenish-Patel31/upnext-ai.git
 cd upnext-ai
 
 # Install dependencies
@@ -320,72 +320,31 @@ We welcome contributions from developers, designers, and financial experts! Here
 
 ## 📱 **Screenshots & Demo**
 
+
 <div align="center">
 
 ### **AI Chatbot Interface**
-![AI Chatbot](https://via.placeholder.com/800x400/4F46E5/FFFFFF?text=AI+Chatbot+Interface)
+<img width="1897" height="1077" alt="image" src="https://github.com/user-attachments/assets/11325548-b54e-4f67-b215-601731a9f0e2" />
+
 
 ### **Financial Dashboard**
-![Dashboard](https://via.placeholder.com/800x400/10B981/FFFFFF?text=Financial+Dashboard)
+<img width="1897" height="1077" alt="image" src="https://github.com/user-attachments/assets/326be216-b6b5-45cc-8a7e-b36e29ec5a12" />
+
+### **Expense Section**
+<img width="1897" height="1077" alt="image" src="https://github.com/user-attachments/assets/cef5bd2a-4ad7-4424-8ff4-5328270becbd" />
+<img width="1897" height="1077" alt="image" src="https://github.com/user-attachments/assets/d062335a-1e5e-4318-92b4-38dd8b3b1aab" />
+
+### **Expense Section**
+<img width="1897" height="1077" alt="image" src="https://github.com/user-attachments/assets/8ec0ebf1-762d-499f-b71c-89a0b2307565" />
 
 ### **Voice Expense Processing**
-![Voice Processing](https://via.placeholder.com/800x400/F59E0B/FFFFFF?text=Voice+Expense+Processing)
+<img width="1897" height="1077" alt="image" src="https://github.com/user-attachments/assets/a8a21f10-f8f2-4ea6-aad2-81fd49847ba1" />
 
-### **Mobile Experience**
-![Mobile](https://via.placeholder.com/400x800/EF4444/FFFFFF?text=Mobile+Experience)
+
 
 </div>
 
 ---
-
-## 🌟 **Success Stories**
-
-### **User Testimonials**
-> *"UpNext AI transformed how I manage my finances. The AI advice is incredibly accurate and personalized!"* - **Priya S., Financial Analyst**
-
-> *"The multilingual support is amazing! I can track expenses in my native language with perfect accuracy."* - **Rajesh K., Business Owner**
-
-> *"As a developer, I'm impressed by the clean architecture and modern tech stack. Great learning resource!"* - **Amit P., Full-Stack Developer**
-
-### **Impact Metrics**
-- **10,000+** active users
-- **₹50M+** expenses tracked
-- **95%** user satisfaction rate
-- **99.9%** system uptime
-
----
-
-## 🔗 **Connect & Support**
-
-### **Community & Support**
-- **Discord**: [Join our community](https://discord.gg/upnext-ai)
-- **GitHub Discussions**: [Ask questions](https://github.com/yourusername/upnext-ai/discussions)
-- **Documentation**: [Comprehensive docs](https://docs.upnext-ai.com)
-- **Blog**: [Latest updates](https://blog.upnext-ai.com)
-
-### **Social Media**
-- **Twitter**: [@UpNextAI](https://twitter.com/UpNextAI)
-- **LinkedIn**: [UpNext AI](https://linkedin.com/company/upnext-ai)
-- **YouTube**: [UpNext AI Channel](https://youtube.com/@upnext-ai)
-
-### **Business Inquiries**
-- **Partnerships**: partnerships@upnext-ai.com
-- **Enterprise**: enterprise@upnext-ai.com
-- **Support**: support@upnext-ai.com
-
----
-
-## 📄 **License & Legal**
-
-This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) file for details.
-
-### **Third-Party Licenses**
-- **Google Gemini**: [Google AI Terms](https://ai.google.dev/terms)
-- **Firebase**: [Firebase Terms](https://firebase.google.com/terms)
-- **MongoDB**: [MongoDB License](https://www.mongodb.com/legal/licensing)
-
----
-
 ## 🙏 **Acknowledgments**
 
 ### **Open Source Contributors**
