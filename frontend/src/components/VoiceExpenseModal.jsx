@@ -1,9 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Mic, MicOff, X, CheckCircle, AlertCircle, Loader2, Volume2, VolumeX, Lightbulb, Edit3, Globe, Target, TrendingUp } from 'lucide-react';
+import { API_BASE_URL } from '../services/api';
 
 // 🌍 Advanced multilingual expense parsing service
-const API_BASE_URL = 'http://localhost:5000/api';
 
 // 🎯 Enhanced language support with cultural context
 const supportedLanguages = [

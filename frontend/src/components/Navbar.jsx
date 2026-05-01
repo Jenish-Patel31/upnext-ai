@@ -4,6 +4,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { auth } from '../firebase-config';
 import { signOut } from 'firebase/auth';
 import NotificationModal from './NotificationModal';
+import { API_BASE_URL } from '../services/api';
 import { 
   Bell, 
   UserCircle, 
@@ -66,11 +67,11 @@ function Navbar({ userName = "User", userEmail = "user@example.com", userPhoto =
         if (!uid) return;
 
         // Fetch categories
-        const categoriesResponse = await fetch(`http://localhost:5000/api/categories/${uid}`);
+        const categoriesResponse = await fetch(`${API_BASE_URL}/categories/${uid}`);
         const categories = await categoriesResponse.ok ? await categoriesResponse.json() : [];
 
         // Fetch expenses
-        const expensesResponse = await fetch(`http://localhost:5000/api/expenses/${uid}`);
+        const expensesResponse = await fetch(`${API_BASE_URL}/expenses/${uid}`);
         const expenses = await expensesResponse.ok ? await expensesResponse.json() : [];
 
         const newNotifications = [];
@@ -173,10 +174,10 @@ function Navbar({ userName = "User", userEmail = "user@example.com", userPhoto =
       const uid = auth.currentUser?.uid;
       if (!uid) return;
 
-      const categoriesResponse = await fetch(`http://localhost:5000/api/categories/${uid}`);
+      const categoriesResponse = await fetch(`${API_BASE_URL}/categories/${uid}`);
       const categories = await categoriesResponse.ok ? await categoriesResponse.json() : [];
 
-      const expensesResponse = await fetch(`http://localhost:5000/api/expenses/${uid}`);
+      const expensesResponse = await fetch(`${API_BASE_URL}/expenses/${uid}`);
       const expenses = await expensesResponse.ok ? await expensesResponse.json() : [];
 
       const newNotifications = [];

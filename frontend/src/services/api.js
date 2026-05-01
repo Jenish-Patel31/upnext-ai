@@ -1,6 +1,9 @@
 import axios from 'axios';
 
-const API_BASE_URL = 'http://localhost:5000/api';
+/** Backend REST base URL including `/api`. Set `VITE_API_BASE_URL` in `.env` for production. */
+export const API_BASE_URL = (
+  import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api'
+).replace(/\/$/, '');
 
 // Create axios instance with default config
 const api = axios.create({
