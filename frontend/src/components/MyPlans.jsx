@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { auth } from '../firebase-config';
+import ChatUI from './Chat/ChatUI.jsx';
 import { 
   Plus, 
   Target, 
@@ -12,8 +14,7 @@ import {
   MessageCircle,
   TrendingUp,
   Award,
-  Star,
-  Send
+  Star
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import * as api from '../services/api.js';
@@ -25,15 +26,16 @@ export default function MyPlans() {
   const [editingPlan, setEditingPlan] = useState(null);
   const [selectedPlan, setSelectedPlan] = useState(null);
   const [showChat, setShowChat] = useState(false);
+  const [chatFocus, setChatFocus] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [message, setMessage] = useState({ type: '', text: '' });
-  const [chatMessage, setChatMessage] = useState('');
-  const [chatResponse, setChatResponse] = useState('');
-  const [isChatLoading, setIsChatLoading] = useState(false);
 
   const [planForm, setPlanForm] = useState({
     goal: '',
-    steps: []
+    steps: [],
+    category: 'general',
+    estimatedMonthlyAmount: '',
+    horizonMonths: '12',
   });
 
   useEffect(() => {
@@ -48,21 +50,42 @@ export default function MyPlans() {
     return () => unsubscribe();
   }, []);
 
-  const loadUserData = async (uid) => {
+  useEffect(() => {
+    const refresh = () => {
+      if (user?.uid) loadUserData(user.uid, { silent: true });
+    };
+    window.addEventListener('upnext-plans-changed', refresh);
+    return () => window.removeEventListener('upnext-plans-changed', refresh);
+  }, [user?.uid]);
+
+  /** Plan-coach modal: keep scoped plan + AI focus text in sync after silent list refresh (e.g. chat saved a plan). */
+  useEffect(() => {
+    if (!showChat || !selectedPlan?._id) return;
+    const id = String(selectedPlan._id);
+    const fresh = plans.find((p) => String(p._id) === id);
+    if (!fresh) return;
+    setSelectedPlan(fresh);
+    setChatFocus(
+      `Plan focus — Goal: "${fresh.goal}". Category: ${fresh.category || 'general'}. Commitment: ${fresh.commitmentMode === 'flexible' ? 'flexible (placeholder OK)' : 'budgeted'}. About ₹${Number(fresh.estimatedMonthlyAmount) || 0}/month for ${fresh.horizonMonths ?? 12} months. Steps: ${(fresh.steps || []).join(' → ') || 'none'}.`
+    );
+  }, [plans, showChat, selectedPlan?._id]);
+
+  /** silent: refresh plans without full-page spinner (keeps ChatUI mounted while chatting). */
+  const loadUserData = async (uid, { silent = false } = {}) => {
     try {
-      setIsLoading(true);
-      
+      if (!silent) setIsLoading(true);
+
       const plansData = await api.getPlans(uid).catch((error) => {
         console.error('Error fetching plans:', error);
         return [];
       });
-      
-      setPlans(plansData);
+
+      setPlans(Array.isArray(plansData) ? plansData : []);
     } catch (error) {
       console.error('Error loading plans:', error);
       setMessage({ type: 'error', text: 'Failed to load plans' });
     } finally {
-      setIsLoading(false);
+      if (!silent) setIsLoading(false);
     }
   };
 
@@ -76,13 +99,21 @@ export default function MyPlans() {
       const newPlan = await api.createPlan({
         uid: user.uid,
         goal: planForm.goal,
-        steps: planForm.steps
+        steps: planForm.steps.filter((s) => String(s).trim()),
+        category: planForm.category,
+        estimatedMonthlyAmount: planForm.estimatedMonthlyAmount
+          ? Number(planForm.estimatedMonthlyAmount)
+          : 0,
+        horizonMonths: planForm.horizonMonths ? Number(planForm.horizonMonths) : 12,
       });
 
-      setPlans(prev => [newPlan.plan, ...prev]);
+      setPlans((prev) => [newPlan.plan, ...prev]);
       setPlanForm({
         goal: '',
-        steps: []
+        steps: [],
+        category: 'general',
+        estimatedMonthlyAmount: '',
+        horizonMonths: '12',
       });
       setShowAddPlan(false);
       setMessage({ type: 'success', text: 'Plan created successfully!' });
@@ -98,21 +129,26 @@ export default function MyPlans() {
     }
 
     try {
-      // For now, we'll recreate the plan since the API doesn't have update
-      await api.createPlan({
-        uid: user.uid,
+      await api.updatePlan(editingPlan._id, {
         goal: planForm.goal,
-        steps: planForm.steps
+        steps: planForm.steps.filter((s) => String(s).trim()),
+        category: planForm.category,
+        estimatedMonthlyAmount: planForm.estimatedMonthlyAmount
+          ? Number(planForm.estimatedMonthlyAmount)
+          : 0,
+        horizonMonths: planForm.horizonMonths ? Number(planForm.horizonMonths) : 12,
       });
 
-      // Remove the old plan and reload
-      setPlans(prev => prev.filter(plan => plan._id !== editingPlan._id));
-      await loadUserData(user.uid);
+      await loadUserData(user.uid, { silent: true });
 
       setEditingPlan(null);
+      setShowAddPlan(false);
       setPlanForm({
         goal: '',
-        steps: []
+        steps: [],
+        category: 'general',
+        estimatedMonthlyAmount: '',
+        horizonMonths: '12',
       });
       setMessage({ type: 'success', text: 'Plan updated successfully!' });
     } catch (error) {
@@ -121,14 +157,13 @@ export default function MyPlans() {
   };
 
   const handleDeletePlan = async (planId) => {
-    if (window.confirm('Are you sure you want to delete this plan?')) {
-      try {
-        // For now, we'll just remove from state since API doesn't have delete
-        setPlans(prev => prev.filter(plan => plan._id !== planId));
-        setMessage({ type: 'success', text: 'Plan deleted successfully!' });
-      } catch (error) {
-        setMessage({ type: 'error', text: error.message });
-      }
+    if (!window.confirm('Are you sure you want to delete this plan?')) return;
+    try {
+      await api.deletePlan(planId);
+      await loadUserData(user.uid, { silent: true });
+      setMessage({ type: 'success', text: 'Plan deleted successfully!' });
+    } catch (error) {
+      setMessage({ type: 'error', text: error.message || 'Delete failed' });
     }
   };
 
@@ -144,31 +179,16 @@ export default function MyPlans() {
     }
   };
 
-  const handleChatMessage = async () => {
-    if (!chatMessage.trim()) return;
-
-    setIsChatLoading(true);
-    try {
-      const response = await api.sendChatMessage({
-        prompt: chatMessage,
-        user: { uid: user.uid }
-      });
-
-      setChatResponse(response.response);
-      
-      // Save chat to database
-      await api.saveChat({
-        uid: user.uid,
-        message: chatMessage,
-        response: response.response
-      });
-
-      setChatMessage('');
-    } catch (error) {
-      setMessage({ type: 'error', text: 'Failed to send message' });
-    } finally {
-      setIsChatLoading(false);
-    }
+  const closePlanEditor = () => {
+    setShowAddPlan(false);
+    setEditingPlan(null);
+    setPlanForm({
+      goal: '',
+      steps: [],
+      category: 'general',
+      estimatedMonthlyAmount: '',
+      horizonMonths: '12',
+    });
   };
 
   const getPriorityColor = (priority) => {
@@ -221,7 +241,14 @@ export default function MyPlans() {
             </div>
             <div className="flex space-x-3 mt-4 sm:mt-0">
               <button
-                onClick={() => setShowChat(true)}
+                type="button"
+                onClick={() => {
+                  setSelectedPlan(null);
+                  setChatFocus(
+                    'User is on My Plans. Help with long-term planning that fits their take-home and active plans already on file.'
+                  );
+                  setShowChat(true);
+                }}
                 className="px-4 py-2 bg-purple-600 text-white font-medium rounded-xl hover:bg-purple-700 transition-colors duration-200 flex items-center space-x-2"
               >
                 <MessageCircle className="w-4 h-4" />
@@ -334,6 +361,20 @@ export default function MyPlans() {
                         }`}>
                           {plan.completed ? 'Completed' : 'Active'}
                         </span>
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-800 capitalize">
+                          {plan.category || 'general'}
+                        </span>
+                        {plan.commitmentMode === 'flexible' && (
+                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-50 text-emerald-900 border border-emerald-200">
+                            Flexible commitment
+                          </span>
+                        )}
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-50 text-amber-900">
+                          ~₹{Number(plan.estimatedMonthlyAmount) || 0}/mo
+                        </span>
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                          {plan.horizonMonths ?? 12} mo horizon
+                        </span>
                         <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
                           {plan.steps?.length || 0} steps
                         </span>
@@ -346,7 +387,13 @@ export default function MyPlans() {
                           setEditingPlan(plan);
                           setPlanForm({
                             goal: plan.goal,
-                            steps: plan.steps || []
+                            steps: plan.steps?.length ? plan.steps : [''],
+                            category: plan.category || 'general',
+                            estimatedMonthlyAmount:
+                              plan.estimatedMonthlyAmount != null
+                                ? String(plan.estimatedMonthlyAmount)
+                                : '',
+                            horizonMonths: String(plan.horizonMonths ?? 12),
                           });
                         }}
                         className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-full transition-colors duration-200"
@@ -398,8 +445,12 @@ export default function MyPlans() {
                     )}
                     
                     <button
+                      type="button"
                       onClick={() => {
                         setSelectedPlan(plan);
+                        setChatFocus(
+                          `Plan focus — Goal: "${plan.goal}". Category: ${plan.category || 'general'}. Commitment: ${plan.commitmentMode === 'flexible' ? 'flexible (placeholder OK)' : 'budgeted'}. About ₹${Number(plan.estimatedMonthlyAmount) || 0}/month for ${plan.horizonMonths ?? 12} months. Steps: ${(plan.steps || []).join(' → ') || 'none'}.`
+                        );
                         setShowChat(true);
                       }}
                       className="flex-1 px-4 py-2 bg-purple-50 text-purple-600 font-medium rounded-xl hover:bg-purple-100 transition-colors duration-200 flex items-center justify-center space-x-2"
@@ -429,28 +480,35 @@ export default function MyPlans() {
         </motion.div>
       </div>
 
-      {/* Add/Edit Plan Modal */}
-      {(showAddPlan || editingPlan) && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
+      {/* Add/Edit Plan — portaled so it sits above nav / transforms */}
+      {(showAddPlan || editingPlan) &&
+        createPortal(
+          <div
+            className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-[280]"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) closePlanEditor();
+            }}
+          >
+            <div
+              className="bg-white rounded-2xl p-6 w-full max-w-md max-h-[90vh] overflow-y-auto shadow-2xl relative z-[281]"
+              onClick={(e) => e.stopPropagation()}
+            >
             <div className="flex items-center justify-between mb-6">
               <h3 className="text-lg font-semibold text-gray-900">
                 {editingPlan ? 'Edit Plan' : 'Add New Plan'}
               </h3>
               <button
-                onClick={() => {
-                  setShowAddPlan(false);
-                  setEditingPlan(null);
-                  setPlanForm({
-                    goal: '',
-                    steps: []
-                  });
-                }}
+                type="button"
+                onClick={closePlanEditor}
                 className="text-gray-400 hover:text-gray-600"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
+
+            <p className="text-xs text-gray-500 mb-4">
+              Plans are long-term (3+ months). Set monthly take-home in Profile so we can keep entertainment / travel / shopping plans realistic.
+            </p>
 
             <div className="space-y-4">
               <div>
@@ -461,6 +519,51 @@ export default function MyPlans() {
                   onChange={(e) => setPlanForm(prev => ({ ...prev, goal: e.target.value }))}
                   className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   placeholder="Enter your goal..."
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Category</label>
+                  <select
+                    value={planForm.category}
+                    onChange={(e) => setPlanForm((prev) => ({ ...prev, category: e.target.value }))}
+                    className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 bg-white"
+                  >
+                    <option value="general">General</option>
+                    <option value="essentials">Essentials</option>
+                    <option value="savings">Savings / invest</option>
+                    <option value="entertainment">Entertainment</option>
+                    <option value="shopping">Shopping</option>
+                    <option value="travel">Travel</option>
+                    <option value="other">Other</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Horizon (months)</label>
+                  <input
+                    type="number"
+                    min={3}
+                    value={planForm.horizonMonths}
+                    onChange={(e) => setPlanForm((prev) => ({ ...prev, horizonMonths: e.target.value }))}
+                    className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Est. monthly amount (₹) — optional, for budget checks
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  value={planForm.estimatedMonthlyAmount}
+                  onChange={(e) =>
+                    setPlanForm((prev) => ({ ...prev, estimatedMonthlyAmount: e.target.value }))
+                  }
+                  className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500"
+                  placeholder="0"
                 />
               </div>
 
@@ -481,6 +584,7 @@ export default function MyPlans() {
                         placeholder={`Step ${index + 1}`}
                       />
                       <button
+                        type="button"
                         onClick={() => {
                           const newSteps = planForm.steps.filter((_, i) => i !== index);
                           setPlanForm(prev => ({ ...prev, steps: newSteps }));
@@ -492,6 +596,7 @@ export default function MyPlans() {
                     </div>
                   ))}
                   <button
+                    type="button"
                     onClick={() => setPlanForm(prev => ({ ...prev, steps: [...prev.steps, ''] }))}
                     className="w-full px-4 py-2 border-2 border-dashed border-gray-300 text-gray-600 rounded-lg hover:border-blue-400 hover:text-blue-600 transition-colors duration-200"
                   >
@@ -503,19 +608,14 @@ export default function MyPlans() {
 
             <div className="flex space-x-3 mt-6">
               <button
-                onClick={() => {
-                  setShowAddPlan(false);
-                  setEditingPlan(null);
-                  setPlanForm({
-                    goal: '',
-                    steps: []
-                  });
-                }}
+                type="button"
+                onClick={closePlanEditor}
                 className="flex-1 px-4 py-3 border border-gray-300 text-gray-700 font-medium rounded-xl hover:bg-gray-50 transition-colors duration-200"
               >
                 Cancel
               </button>
               <button
+                type="button"
                 onClick={editingPlan ? handleUpdatePlan : handleAddPlan}
                 className="flex-1 px-4 py-3 bg-blue-600 text-white font-medium rounded-xl hover:bg-blue-700 transition-colors duration-200"
               >
@@ -523,76 +623,25 @@ export default function MyPlans() {
               </button>
             </div>
           </div>
-        </div>
-      )}
+        </div>,
+          document.body
+        )}
 
-      {/* Chat Modal */}
-      {showChat && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl p-6 w-full max-w-2xl max-h-[80vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-6">
-              <h3 className="text-lg font-semibold text-gray-900">
-                Chat with AI about {selectedPlan?.goal || 'your plans'}
-              </h3>
-              <button
-                onClick={() => {
-                  setShowChat(false);
-                  setSelectedPlan(null);
-                  setChatMessage('');
-                  setChatResponse('');
-                }}
-                className="text-gray-400 hover:text-gray-600"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="bg-gray-50 rounded-xl p-4 mb-4">
-              <p className="text-sm text-gray-600">
-                Ask me anything about your plans! I can help you:
-              </p>
-              <ul className="text-sm text-gray-600 mt-2 space-y-1">
-                <li>• Break down complex goals into smaller milestones</li>
-                <li>• Suggest strategies to achieve your targets</li>
-                <li>• Help you stay motivated and on track</li>
-                <li>• Provide tips for better time management</li>
-              </ul>
-            </div>
-
-            {chatResponse && (
-              <div className="mb-4 p-4 bg-blue-50 rounded-xl">
-                <p className="text-sm text-gray-800">{chatResponse}</p>
-              </div>
-            )}
-
-            <div className="space-y-4">
-              <div className="flex space-x-3">
-                <div className="flex-1">
-                  <input
-                    type="text"
-                    value={chatMessage}
-                    onChange={(e) => setChatMessage(e.target.value)}
-                    onKeyPress={(e) => e.key === 'Enter' && handleChatMessage()}
-                    placeholder="Ask me about your plans..."
-                    className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    disabled={isChatLoading}
-                  />
-                </div>
-                <button 
-                  onClick={handleChatMessage}
-                  disabled={isChatLoading || !chatMessage.trim()}
-                  className="px-6 py-3 bg-blue-600 text-white font-medium rounded-xl hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-200"
-                >
-                  {isChatLoading ? (
-                    <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
-                  ) : (
-                    <Send className="w-5 h-5" />
-                  )}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
+      {user && (
+        <ChatUI
+          key={selectedPlan?._id ? `plan-${selectedPlan._id}` : 'general'}
+          isOpen={showChat}
+          onClose={() => {
+            setShowChat(false);
+            setSelectedPlan(null);
+            setChatFocus('');
+            if (user?.uid) loadUserData(user.uid, { silent: true });
+          }}
+          user={user}
+          focusContext={chatFocus}
+          scopedPlan={selectedPlan}
+          onPlansMutated={() => user?.uid && loadUserData(user.uid, { silent: true })}
+        />
       )}
     </div>
   );

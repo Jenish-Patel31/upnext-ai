@@ -1,9 +1,7 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
 import dotenv from 'dotenv';
-dotenv.config();
+import { generateContentWithFallback } from '../utils/gemini.js';
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+dotenv.config();
 
 // 🧠 Advanced multilingual expense parsing with 99.99% accuracy
 export const parseExpenseWithAI = async (text, categoryNames, userLanguage = 'en') => {
@@ -119,7 +117,7 @@ AVAILABLE CATEGORIES: ${categoryNames.join(', ')}
 Now parse this expense with PERFECT accuracy:`;
 
     // 🚀 Enhanced Gemini API call with structured output
-    const result = await model.generateContent({
+    const result = await generateContentWithFallback({
       contents: [{
         role: 'user',
         parts: [{ text: prompt }]

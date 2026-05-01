@@ -1,0 +1,16 @@
+# Local secrets — keep files on your machine; do not commit
+.env
+backend/.env
+frontend/.env
+
+# Dependencies & build
+node_modules/
+frontend/dist
+dist
+
+# Logs & OS
+*.log
+.DS_Store
+.idea
+.vscode/*
+!.vscode/extensions.json

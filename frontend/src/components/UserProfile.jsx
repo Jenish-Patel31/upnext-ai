@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { auth } from '../firebase-config';
-import { updateProfile, updateEmail, updatePassword, deleteUser } from 'firebase/auth';
+import { updateProfile, updateEmail, updatePassword, deleteUser, reload } from 'firebase/auth';
+import { getUser, updateUser as updateUserApi, syncUserFromFirebase } from '../services/api';
 import { 
   User, 
   Mail, 
@@ -21,6 +22,7 @@ import { motion } from 'framer-motion';
 
 export default function UserProfile() {
   const [user, setUser] = useState(null);
+  const [profileLoading, setProfileLoading] = useState(true);
   const [isEditing, setIsEditing] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [message, setMessage] = useState({ type: '', text: '' });
@@ -34,7 +36,9 @@ export default function UserProfile() {
     bio: '',
     dateOfBirth: '',
     occupation: '',
-    company: ''
+    company: '',
+    monthlyTakeHome: '',
+    riskProfile: 'moderate',
   });
 
   // Password change states
@@ -46,21 +50,47 @@ export default function UserProfile() {
   });
 
   useEffect(() => {
-    const unsubscribe = auth.onAuthStateChanged((currentUser) => {
-      if (currentUser) {
-        setUser(currentUser);
-        
-        // Set form data with better fallbacks
-        setFormData({
-          displayName: currentUser.displayName || '',
-          email: currentUser.email || '',
-          phone: currentUser.phoneNumber || '',
-          location: '',
-          bio: '',
-          dateOfBirth: '',
-          occupation: '',
-          company: ''
-        });
+    const applyServerProfile = (currentUser, serverUser) => {
+      setFormData({
+        displayName: serverUser?.name || currentUser.displayName || '',
+        email: serverUser?.email || currentUser.email || '',
+        phone: serverUser?.phone || currentUser.phoneNumber || '',
+        location: serverUser?.location || '',
+        bio: serverUser?.bio || '',
+        dateOfBirth: serverUser?.dateOfBirth || '',
+        occupation: serverUser?.occupation || '',
+        company: serverUser?.company || '',
+        monthlyTakeHome:
+          serverUser?.preferences?.budget != null
+            ? String(serverUser.preferences.budget)
+            : '',
+        riskProfile: serverUser?.preferences?.riskProfile || 'moderate',
+      });
+    };
+
+    const unsubscribe = auth.onAuthStateChanged(async (currentUser) => {
+      if (!currentUser) {
+        setUser(null);
+        setProfileLoading(false);
+        return;
+      }
+
+      setUser(currentUser);
+      setProfileLoading(true);
+      try {
+        let payload;
+        try {
+          payload = await getUser(currentUser.uid);
+        } catch {
+          await syncUserFromFirebase(currentUser);
+          payload = await getUser(currentUser.uid);
+        }
+        applyServerProfile(currentUser, payload?.user);
+      } catch (e) {
+        console.error('Failed to load profile from server:', e);
+        applyServerProfile(currentUser, null);
+      } finally {
+        setProfileLoading(false);
       }
     });
 
@@ -106,42 +136,65 @@ export default function UserProfile() {
           await updateProfile(user, {
             displayName: formData.displayName.trim()
           });
-          console.log('Profile displayName updated successfully');
         } catch (profileError) {
           console.error('Error updating displayName:', profileError);
-          // Don't fail the entire operation for this
         }
       }
 
-      // For email updates, only allow if not a Google user
-      if (formData.email !== user.email && formData.email.trim()) {
-        const isGoogleUser = user.providerData && user.providerData.length > 0 && 
-                           user.providerData[0].providerId === 'google.com';
-        
-        if (isGoogleUser) {
-          setMessage({ 
-            type: 'error', 
-            text: 'Email cannot be changed for Google accounts. Please update it in your Google Account settings.' 
-          });
-          return;
-        }
-
+      // Email: Google accounts keep Firebase/Google as source of truth; email/password can use updateEmail
+      const isGoogle =
+        user.providerData?.[0]?.providerId === 'google.com';
+      if (formData.email !== user.email && formData.email.trim() && !isGoogle) {
         try {
           await updateEmail(user, formData.email.trim());
-          console.log('Email updated successfully');
         } catch (emailError) {
           console.error('Error updating email:', emailError);
           setMessage({ type: 'error', text: emailError.message });
+          setIsLoading(false);
           return;
         }
+      }
+
+      await reload(user);
+      const fresh = auth.currentUser;
+      if (fresh) setUser(fresh);
+
+      await updateUserApi(user.uid, {
+        name: formData.displayName.trim() || fresh?.displayName || '',
+        email: fresh?.email || user.email,
+        phone: formData.phone,
+        location: formData.location,
+        bio: formData.bio,
+        dateOfBirth: formData.dateOfBirth,
+        occupation: formData.occupation,
+        company: formData.company,
+        preferences: {
+          budget: formData.monthlyTakeHome ? Number(formData.monthlyTakeHome) : 0,
+          riskProfile: formData.riskProfile || 'moderate',
+        },
+      });
+
+      const payload = await getUser(user.uid);
+      if (payload?.user && fresh) {
+        setFormData({
+          displayName: payload.user.name || fresh.displayName || '',
+          email: payload.user.email || fresh.email || '',
+          phone: payload.user.phone || fresh.phoneNumber || '',
+          location: payload.user.location || '',
+          bio: payload.user.bio || '',
+          dateOfBirth: payload.user.dateOfBirth || '',
+          occupation: payload.user.occupation || '',
+          company: payload.user.company || '',
+          monthlyTakeHome:
+            payload.user.preferences?.budget != null
+              ? String(payload.user.preferences.budget)
+              : '',
+          riskProfile: payload.user.preferences?.riskProfile || 'moderate',
+        });
       }
 
       setMessage({ type: 'success', text: 'Profile updated successfully!' });
       setIsEditing(false);
-      
-      // Refresh the user object to get updated data
-      setUser({ ...user });
-      
     } catch (error) {
       console.error('Profile update error:', error);
       setMessage({ type: 'error', text: error.message });
@@ -186,7 +239,7 @@ export default function UserProfile() {
     }
   };
 
-  if (!user) {
+  if (!user || profileLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100">
         <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
@@ -365,6 +418,45 @@ export default function UserProfile() {
                       disabled={!isEditing}
                       className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-50 disabled:text-gray-500"
                     />
+                  </div>
+
+                  <div className="md:col-span-2 pt-4 mt-2 border-t border-gray-200">
+                    <h4 className="text-sm font-semibold text-gray-900 mb-3">
+                      Financial planning (powers AI & My Plans checks)
+                    </h4>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Monthly take-home (₹)
+                        </label>
+                        <input
+                          type="number"
+                          name="monthlyTakeHome"
+                          min={0}
+                          value={formData.monthlyTakeHome}
+                          onChange={handleInputChange}
+                          disabled={!isEditing}
+                          className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-50 disabled:text-gray-500"
+                          placeholder="e.g. 100000"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Risk comfort
+                        </label>
+                        <select
+                          name="riskProfile"
+                          value={formData.riskProfile}
+                          onChange={handleInputChange}
+                          disabled={!isEditing}
+                          className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 bg-white disabled:bg-gray-50 disabled:text-gray-500"
+                        >
+                          <option value="conservative">Conservative</option>
+                          <option value="moderate">Moderate</option>
+                          <option value="aggressive">Aggressive</option>
+                        </select>
+                      </div>
+                    </div>
                   </div>
                 </div>
 

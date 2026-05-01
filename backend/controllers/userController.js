@@ -22,9 +22,21 @@ export const createUser = async (req, res) => {
             });
         }
 
-        // Check if user already exists
+        // Check if user already exists — refresh name/email from Firebase on each sync
         const existingUser = await User.findOne({ uid });
         if (existingUser) {
+            let changed = false;
+            const nextName = name.trim();
+            const nextEmail = email.trim().toLowerCase();
+            if (nextName && existingUser.name !== nextName) {
+                existingUser.name = nextName;
+                changed = true;
+            }
+            if (nextEmail && existingUser.email !== nextEmail) {
+                existingUser.email = nextEmail;
+                changed = true;
+            }
+            if (changed) await existingUser.save();
             return res.status(200).json({
                 message: "User already exists",
                 user: existingUser
@@ -101,17 +113,34 @@ export const getUser = async (req, res) => {
 export const updateUser = async (req, res) => {
     try {
         const { uid } = req.params;
-        const { name, email, goals, preferences } = req.body;
+        const {
+            name,
+            email,
+            goals,
+            preferences,
+            phone,
+            location,
+            bio,
+            dateOfBirth,
+            occupation,
+            company,
+        } = req.body;
         
         if (!uid) {
             return res.status(400).json({ error: 'User ID is required' });
         }
 
         const updateData = {};
-        if (name !== undefined) updateData.name = name.trim();
-        if (email !== undefined) updateData.email = email.trim().toLowerCase();
+        if (name !== undefined) updateData.name = typeof name === 'string' ? name.trim() : name;
+        if (email !== undefined) updateData.email = typeof email === 'string' ? email.trim().toLowerCase() : email;
         if (goals !== undefined) updateData.goals = goals;
         if (preferences !== undefined) updateData.preferences = preferences;
+        if (phone !== undefined) updateData.phone = typeof phone === 'string' ? phone.trim() : phone;
+        if (location !== undefined) updateData.location = typeof location === 'string' ? location.trim() : location;
+        if (bio !== undefined) updateData.bio = typeof bio === 'string' ? bio.trim() : bio;
+        if (dateOfBirth !== undefined) updateData.dateOfBirth = typeof dateOfBirth === 'string' ? dateOfBirth.trim() : dateOfBirth;
+        if (occupation !== undefined) updateData.occupation = typeof occupation === 'string' ? occupation.trim() : occupation;
+        if (company !== undefined) updateData.company = typeof company === 'string' ? company.trim() : company;
 
         const updatedUser = await User.findOneAndUpdate(
             { uid },

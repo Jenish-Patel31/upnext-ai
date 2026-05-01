@@ -1,5 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
+import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "framer-motion";
+import { updateChatSessionName, deleteChatSession } from "../../services/api.js";
 
 // Professional icons using inline SVGs
 const ChatbotIcon = (props) => (<svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M13 8H7"/><path d="M17 12H7"/><circle cx="12" cy="12" r="1"/><circle cx="8" cy="12" r="1"/><circle cx="16" cy="12" r="1"/></svg>);
@@ -96,6 +98,7 @@ const ChatSessionItem = ({ chat, onLoad, onRename, onDelete, isActive }) => {
     return (
         <div className="relative group">
             <button
+                type="button"
                 onClick={() => onLoad(chat)}
                 onContextMenu={handleContextMenu}
                 className={`w-full text-left p-3 rounded-xl transition-colors text-sm ${
@@ -172,8 +175,12 @@ const ChatSessionItem = ({ chat, onLoad, onRename, onDelete, isActive }) => {
 
             {/* 3-dot menu button */}
             <button
+                type="button"
                 ref={menuRef}
-                onClick={() => setShowMenu(!showMenu)}
+                onClick={(e) => {
+                    e.stopPropagation();
+                    setShowMenu(!showMenu);
+                }}
                 className="absolute top-2 right-2 p-1 rounded-full hover:bg-gray-200 opacity-0 group-hover:opacity-100 transition-opacity"
             >
                 <MoreVertical className="h-4 w-4 text-gray-500" />
@@ -190,7 +197,9 @@ const ChatSessionItem = ({ chat, onLoad, onRename, onDelete, isActive }) => {
                     >
                         <div className="py-1">
                             <button
-                                onClick={() => {
+                                type="button"
+                                onClick={(e) => {
+                                    e.stopPropagation();
                                     setIsRenaming(true);
                                     setShowMenu(false);
                                 }}
@@ -200,7 +209,9 @@ const ChatSessionItem = ({ chat, onLoad, onRename, onDelete, isActive }) => {
                                 Rename
                             </button>
                             <button
-                                onClick={() => {
+                                type="button"
+                                onClick={(e) => {
+                                    e.stopPropagation();
                                     onDelete(chat.sessionId);
                                     setShowMenu(false);
                                 }}
@@ -217,13 +228,37 @@ const ChatSessionItem = ({ chat, onLoad, onRename, onDelete, isActive }) => {
     );
 };
 
-export default function ChatUI({ isOpen, onClose, user }) {
-    const [messages, setMessages] = useState([
+function notifyPlansMutatedFromResponse(data) {
+    if (data?.planCreated || data?.planUpdated) {
+        window.dispatchEvent(new CustomEvent("upnext-plans-changed"));
+    }
+}
+
+const PLAN_SESSION_PREFIX = "plan_";
+
+function planThreadSessionId(planId) {
+    return `${PLAN_SESSION_PREFIX}${planId}`;
+}
+
+function buildPlanCoachWelcome(plan) {
+    const steps = Array.isArray(plan?.steps) ? plan.steps.filter(Boolean) : [];
+    const stepsPreview =
+        steps.length > 0
+            ? `\n\nYour steps:\n${steps.slice(0, 6).map((s, i) => `${i + 1}. ${s}`).join("\n")}${steps.length > 6 ? "\n…" : ""}`
+            : "";
+    return `This space is only for "${plan.goal}". Every message here stays in this plan’s thread.${stepsPreview}\n\nAsk about progress, money, timelines, or changing the plan — I’ll stay focused on this goal.`;
+}
+
+const DEFAULT_GENERAL_WELCOME =
+    "Hey there! 👋 I'm UpNext AI, your personal AI assistant. How can I help you today? 🚀";
+
+export default function ChatUI({ isOpen, onClose, user, focusContext = "", onPlansMutated, scopedPlan = null }) {
+    const [messages, setMessages] = useState(() => [
         {
             from: "bot",
-            text: "Hey there! 👋 I'm UpNext AI, your personal AI assistant. How can I help you today? 🚀",
-            timestamp: new Date()
-        }
+            text: scopedPlan?._id ? buildPlanCoachWelcome(scopedPlan) : DEFAULT_GENERAL_WELCOME,
+            timestamp: new Date(),
+        },
     ]);
     const [input, setInput] = useState("");
     const [file, setFile] = useState(null);
@@ -231,19 +266,84 @@ export default function ChatUI({ isOpen, onClose, user }) {
     const [pastChats, setPastChats] = useState([]);
     const [isSidebarOpen, setIsSidebarOpen] = useState(true);
     const [currentSessionId, setCurrentSessionId] = useState(null);
+    const [pendingPlanChoice, setPendingPlanChoice] = useState(null);
     const messagesEndRef = useRef(null);
     const inputRef = useRef(null);
 
     const USER_ID = user?.uid || "demo-user";
+    const isPlanChat = Boolean(scopedPlan?._id);
 
-    // Generate a unique session ID when modal opens
+    // General chat: one session id per open cycle (don’t regenerate each time). Plan chat: fixed thread per plan.
     useEffect(() => {
-        if (isOpen) {
-            const newSessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-            setCurrentSessionId(newSessionId);
-            console.log('🆔 New chat session started:', newSessionId);
+        if (!isOpen) return;
+        if (scopedPlan?._id) {
+            setCurrentSessionId(planThreadSessionId(scopedPlan._id));
+            return;
         }
-    }, [isOpen]);
+        setCurrentSessionId((prev) => {
+            if (prev && !String(prev).startsWith(PLAN_SESSION_PREFIX)) return prev;
+            const id = `session_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+            console.log("🆔 New chat session id:", id);
+            return id;
+        });
+    }, [isOpen, scopedPlan?._id]);
+
+    // Plan-only thread: load full history when opening
+    useEffect(() => {
+        if (!isOpen || !user?.uid || !scopedPlan?._id) return;
+        let cancelled = false;
+        const sid = planThreadSessionId(scopedPlan._id);
+        (async () => {
+            try {
+                const response = await fetch(`${API_URL}/history`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ uid: user.uid, sessionId: sid }),
+                });
+                if (!response.ok || cancelled) return;
+                const sessionChats = await response.json();
+                if (cancelled) return;
+                if (!sessionChats.length) {
+                    setMessages([
+                        {
+                            from: "bot",
+                            text: buildPlanCoachWelcome(scopedPlan),
+                            timestamp: new Date(),
+                        },
+                    ]);
+                    return;
+                }
+                const sessionMessages = [];
+                sessionChats.forEach((chatMsg) => {
+                    sessionMessages.push(
+                        {
+                            from: "user",
+                            text: chatMsg.message,
+                            timestamp: chatMsg.createdAt ? new Date(chatMsg.createdAt) : new Date(),
+                        },
+                        {
+                            from: "bot",
+                            text: chatMsg.response,
+                            timestamp: chatMsg.updatedAt
+                                ? new Date(chatMsg.updatedAt)
+                                : new Date(chatMsg.createdAt),
+                        }
+                    );
+                });
+                setMessages(sessionMessages);
+            } catch (e) {
+                console.error("Plan thread load failed:", e);
+            }
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, [isOpen, scopedPlan?._id, user?.uid]);
+
+    // Plan UI: no multi-session sidebar. General: show sidebar by default.
+    useEffect(() => {
+        if (isOpen) setIsSidebarOpen(!isPlanChat);
+    }, [isOpen, isPlanChat, scopedPlan?._id]);
 
     // Auto-scroll to latest message
     useEffect(() => {
@@ -252,12 +352,12 @@ export default function ChatUI({ isOpen, onClose, user }) {
         }
     }, [messages, isOpen]);
 
-    // Load chat history when modal opens
+    // Load chat history when modal opens (general assistant only — plan threads stay in their own session)
     useEffect(() => {
-        if (isOpen && user?.uid) {
+        if (isOpen && user?.uid && !isPlanChat) {
             loadPastChats();
         }
-    }, [isOpen, user?.uid]);
+    }, [isOpen, user?.uid, isPlanChat, scopedPlan?._id]);
 
     // Focus input when modal opens
     useEffect(() => {
@@ -283,25 +383,34 @@ export default function ChatUI({ isOpen, onClose, user }) {
                 
                 // Group chats by session
                 const chatsBySession = {};
-                allChats.forEach(chat => {
-                    const sessionId = chat.sessionId || 'default';
+                allChats.forEach((chat) => {
+                    const sessionId = chat.sessionId || "default";
+                    if (String(sessionId).startsWith(PLAN_SESSION_PREFIX)) return;
                     if (!chatsBySession[sessionId]) {
                         chatsBySession[sessionId] = [];
                     }
                     chatsBySession[sessionId].push(chat);
                 });
                 
-                // Convert to array format for display
-                const sessionChats = Object.entries(chatsBySession).map(([sessionId, chats]) => ({
-                    sessionId,
-                    message: chats[0]?.message || 'Session',
-                    response: chats[0]?.response || '',
-                    createdAt: chats[0]?.createdAt || new Date(),
-                    updatedAt: chats[chats.length - 1]?.updatedAt || new Date(),
-                    messageCount: chats.length,
-                    customName: chats[0]?.customName || '' // Include custom name
-                }));
-                
+                // Per session: chronological order for preview + activity time
+                const sessionChats = Object.entries(chatsBySession).map(([sessionId, chats]) => {
+                    const sorted = [...chats].sort(
+                        (a, b) => new Date(a.createdAt) - new Date(b.createdAt)
+                    );
+                    const first = sorted[0];
+                    const last = sorted[sorted.length - 1];
+                    return {
+                        sessionId,
+                        message: first?.message || 'Session',
+                        response: first?.response || '',
+                        createdAt: first?.createdAt || new Date(),
+                        updatedAt: last?.updatedAt || last?.createdAt || new Date(),
+                        messageCount: chats.length,
+                        customName: first?.customName || sorted.find((c) => c.customName)?.customName || '',
+                    };
+                });
+                sessionChats.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+
                 setPastChats(sessionChats || []);
             }
         } catch (error) {
@@ -316,7 +425,7 @@ export default function ChatUI({ isOpen, onClose, user }) {
         
         try {
             console.log('🔄 Attempting to rename chat session:', { sessionId, newName, uid: user.uid });
-            await api.updateChatSessionName(user.uid, sessionId, newName);
+            await updateChatSessionName(user.uid, sessionId, newName);
             console.log('✅ Chat session renamed successfully');
             // Show success message
             alert(`Chat renamed to: "${newName}"`);
@@ -330,6 +439,10 @@ export default function ChatUI({ isOpen, onClose, user }) {
 
     // Delete chat session
     const handleDeleteChat = async (sessionId) => {
+        if (!sessionId || String(sessionId).trim() === '') {
+            alert('Cannot delete: invalid session.');
+            return;
+        }
         if (!user?.uid || !confirm('Are you sure you want to delete this chat session? This action cannot be undone.')) {
             return;
         }
@@ -337,7 +450,7 @@ export default function ChatUI({ isOpen, onClose, user }) {
         try {
             // Delete from database
             console.log('🔄 Attempting to delete chat session:', { sessionId, uid: user.uid });
-            await api.deleteChatSession(user.uid, sessionId);
+            await deleteChatSession(user.uid, sessionId);
             console.log('✅ Chat session deleted from database');
             // Remove from local state
             setPastChats(prev => prev.filter(chat => chat.sessionId !== sessionId));
@@ -382,6 +495,7 @@ export default function ChatUI({ isOpen, onClose, user }) {
         // Extract session ID from the chat or generate a new one
         const sessionId = chat.sessionId || `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
         setCurrentSessionId(sessionId);
+        setPendingPlanChoice(null);
         console.log('🆔 Loading chat session:', sessionId);
         
         try {
@@ -413,7 +527,7 @@ export default function ChatUI({ isOpen, onClose, user }) {
                 });
                 
                 setMessages(sessionMessages);
-                setIsSidebarOpen(false);
+                setIsSidebarOpen(true);
             } else {
                 // Fallback to single message if session loading fails
                 setMessages([
@@ -428,7 +542,7 @@ export default function ChatUI({ isOpen, onClose, user }) {
                         timestamp: chat.updatedAt ? new Date(chat.updatedAt) : new Date()
                     }
                 ]);
-                setIsSidebarOpen(false);
+                setIsSidebarOpen(true);
             }
         } catch (error) {
             console.error('Failed to load session messages:', error);
@@ -445,7 +559,7 @@ export default function ChatUI({ isOpen, onClose, user }) {
                     timestamp: chat.updatedAt ? new Date(chat.updatedAt) : new Date()
                 }
             ]);
-            setIsSidebarOpen(false);
+            setIsSidebarOpen(true);
         }
     };
 
@@ -501,9 +615,78 @@ export default function ChatUI({ isOpen, onClose, user }) {
         setLoading(false);
     };
 
+    const newSessionId = () =>
+        `session_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+
     // Send message
+    const resolvePlanChoice = async (action) => {
+        if (!pendingPlanChoice?.draft || !user?.uid) return;
+        let sid = currentSessionId;
+        if (!sid) {
+            sid = newSessionId();
+            setCurrentSessionId(sid);
+        }
+        setLoading(true);
+        try {
+            const { draft, conflict } = pendingPlanChoice;
+            const payload = {
+                prompt:
+                    action === "create_new"
+                        ? "Create as a separate new plan (confirmed)"
+                        : "Update the existing similar plan (confirmed)",
+                user: { uid: user.uid },
+                sessionId: sid,
+                planResolution:
+                    action === "create_new"
+                        ? { action: "create_new", draft }
+                        : {
+                              action: "update_existing",
+                              existingPlanId: conflict.existingPlanId,
+                              draft,
+                          },
+            };
+            if (focusContext && String(focusContext).trim()) {
+                payload.focusContext = String(focusContext).trim();
+            }
+            const res = await fetch(API_URL, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+            });
+            const data = await res.json();
+            if (!res.ok || data.error) {
+                throw new Error(data.error || `HTTP ${res.status}`);
+            }
+            setPendingPlanChoice(null);
+            setMessages((msgs) => [
+                ...msgs,
+                {
+                    from: "bot",
+                    text: data.response || "Done.",
+                    timestamp: new Date(),
+                },
+            ]);
+            notifyPlansMutatedFromResponse(data);
+            onPlansMutated?.();
+            await loadPastChats();
+        } catch (e) {
+            console.error(e);
+            setMessages((msgs) => [
+                ...msgs,
+                {
+                    from: "bot",
+                    text: `Could not update plans: ${e.message}`,
+                    timestamp: new Date(),
+                },
+            ]);
+        }
+        setLoading(false);
+    };
+
     const sendMessage = async () => {
         if (!input.trim() && !file) return;
+
+        setPendingPlanChoice(null);
 
         const userMessage = { from: "user", text: input, image: file, timestamp: new Date() };
         setMessages((msgs) => [...msgs, userMessage]);
@@ -515,12 +698,18 @@ export default function ChatUI({ isOpen, onClose, user }) {
         setFile(null);
         setLoading(true);
 
-        // Auto-generate a better name for the chat session if it's the first message
-        if (messages.length === 1) { // Only the welcome message
+        let sid = currentSessionId;
+        if (!sid) {
+            sid = newSessionId();
+            setCurrentSessionId(sid);
+        }
+
+        // Auto-generate a better name for the chat session if it's the first message (not plan threads)
+        if (!isPlanChat && messages.length === 1) { // Only the welcome message
             const autoName = generateChatName(currentInput);
             if (autoName && user?.uid) {
                 try {
-                    await api.updateChatSessionName(user.uid, currentSessionId, autoName);
+                    await updateChatSessionName(user.uid, sid, autoName);
                     // Refresh chat list to show the new name
                     await loadPastChats();
                 } catch (error) {
@@ -533,8 +722,12 @@ export default function ChatUI({ isOpen, onClose, user }) {
         const payload = {
             prompt: currentInput,
             user: { uid: user?.uid || 'anonymous' },
-            sessionId: currentSessionId // Include session ID for chat isolation
+            sessionId: sid,
         };
+
+        if (focusContext && String(focusContext).trim()) {
+            payload.focusContext = String(focusContext).trim();
+        }
 
         if (currentFile) {
             payload.imageData = {
@@ -566,6 +759,18 @@ export default function ChatUI({ isOpen, onClose, user }) {
                 timestamp: new Date()
             };
             setMessages((msgs) => [...msgs, botMessage]);
+
+            if (data.planConflict && data.planDraft) {
+                setPendingPlanChoice({
+                    draft: data.planDraft,
+                    conflict: data.planConflict,
+                });
+            } else {
+                setPendingPlanChoice(null);
+            }
+
+            notifyPlansMutatedFromResponse(data);
+            onPlansMutated?.();
 
             await loadPastChats();
 
@@ -606,21 +811,21 @@ export default function ChatUI({ isOpen, onClose, user }) {
 
     // Clear chat
     const clearChat = () => {
-        // Generate a new session ID for fresh context
-        const newSessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-        setCurrentSessionId(newSessionId);
-        console.log('🆔 New chat session started (clear chat):', newSessionId);
+        const id = newSessionId();
+        setCurrentSessionId(id);
+        console.log('🆔 New chat session started (clear chat):', id);
         
         setMessages([
             {
                 from: "bot",
-                text: "Hey there! 👋 I'm UpNext AI, your personal AI assistant. How can I help you today? 🚀",
-                timestamp: new Date()
-            }
+                text: DEFAULT_GENERAL_WELCOME,
+                timestamp: new Date(),
+            },
         ]);
         setFile(null);
         setInput("");
-        setIsSidebarOpen(false);
+        setIsSidebarOpen(true);
+        setPendingPlanChoice(null);
     };
 
     // Format time
@@ -710,7 +915,13 @@ export default function ChatUI({ isOpen, onClose, user }) {
                         >
                             <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
                                 {!isUser && (
-                                    <div className="flex-shrink-0 w-8 h-8 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center mr-3 mt-1 shadow-sm">
+                                    <div
+                                        className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center mr-3 mt-1 shadow-sm ${
+                                            isPlanChat
+                                                ? "bg-gradient-to-br from-emerald-500 to-teal-700"
+                                                : "bg-gradient-to-br from-blue-500 to-purple-600"
+                                        }`}
+                                    >
                                         <ChatbotIcon className="h-4 w-4 text-white" />
                                     </div>
                                 )}
@@ -718,8 +929,12 @@ export default function ChatUI({ isOpen, onClose, user }) {
                                     <div
                                         className={`px-4 py-3 rounded-2xl text-sm max-w-full shadow-sm ${
                                             isUser
-                                                ? "bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-br-md"
-                                                : "bg-white text-gray-800 rounded-bl-md border border-gray-100"
+                                                ? isPlanChat
+                                                    ? "bg-gradient-to-r from-emerald-600 to-teal-700 text-white rounded-br-md"
+                                                    : "bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-br-md"
+                                                : isPlanChat
+                                                  ? "bg-white text-gray-800 rounded-bl-md border border-emerald-100 shadow-emerald-100/50"
+                                                  : "bg-white text-gray-800 rounded-bl-md border border-gray-100"
                                         }`}
                                     >
                                         <div className="whitespace-pre-wrap leading-relaxed">{msg.text}</div>
@@ -761,13 +976,13 @@ export default function ChatUI({ isOpen, onClose, user }) {
 
     if (!isOpen) return null;
 
-    return (
+    return createPortal(
         <AnimatePresence>
             <motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+                className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[300] flex items-center justify-center p-4"
                 onClick={onClose}
             >
                 <motion.div
@@ -775,12 +990,55 @@ export default function ChatUI({ isOpen, onClose, user }) {
                     animate={{ opacity: 1, scale: 1, y: 0 }}
                     exit={{ opacity: 0, scale: 0.9, y: 20 }}
                     transition={{ type: "spring", damping: 25, stiffness: 300 }}
-                    className="bg-white rounded-2xl shadow-2xl w-full max-w-6xl h-[90vh] flex overflow-hidden"
+                    className={`bg-white rounded-2xl shadow-2xl w-full h-[90vh] flex overflow-hidden ${
+                        isPlanChat ? "max-w-6xl ring-2 ring-emerald-500/25" : "max-w-6xl"
+                    }`}
                     onClick={(e) => e.stopPropagation()}
                 >
-                    {/* Sidebar */}
+                    {isPlanChat && scopedPlan && (
+                        <aside className="w-72 shrink-0 bg-gradient-to-b from-emerald-950 via-slate-900 to-slate-950 text-white flex flex-col border-r border-emerald-900/40">
+                            <div className="p-5 flex flex-col h-full min-h-0">
+                                <p className="text-[10px] font-semibold uppercase tracking-widest text-emerald-400/90 mb-2">
+                                    Plan coach
+                                </p>
+                                <h3 className="text-base font-semibold leading-snug text-white mb-3">
+                                    {scopedPlan.goal}
+                                </h3>
+                                <div className="text-xs text-emerald-100/75 space-y-1 mb-4">
+                                    <p className="capitalize">{scopedPlan.category || "general"}</p>
+                                    <p>
+                                        ~₹{Number(scopedPlan.estimatedMonthlyAmount) || 0}/mo ·{" "}
+                                        {scopedPlan.horizonMonths ?? 12} mo horizon
+                                    </p>
+                                </div>
+                                <div className="flex-1 overflow-y-auto min-h-0 pr-1">
+                                    <p className="text-[11px] uppercase text-slate-500 font-medium mb-2">
+                                        Your steps
+                                    </p>
+                                    <ul className="space-y-2 text-sm text-slate-200">
+                                        {(scopedPlan.steps || []).length ? (
+                                            (scopedPlan.steps || []).map((step, i) => (
+                                                <li key={i} className="flex gap-2">
+                                                    <span className="text-emerald-400 shrink-0">{i + 1}.</span>
+                                                    <span>{step}</span>
+                                                </li>
+                                            ))
+                                        ) : (
+                                            <li className="text-slate-500 italic">No steps listed</li>
+                                        )}
+                                    </ul>
+                                </div>
+                                <p className="text-[11px] text-slate-500 mt-4 pt-4 border-t border-slate-700 leading-relaxed">
+                                    This sidebar only shows while you chat about this plan. All messages here are
+                                    stored together so you can pick up where you left off.
+                                </p>
+                            </div>
+                        </aside>
+                    )}
+
+                    {/* Sidebar (general assistant only) */}
                     <AnimatePresence>
-                        {isSidebarOpen && (
+                        {!isPlanChat && isSidebarOpen && (
                             <motion.div
                                 initial={{ x: "-100%" }}
                                 animate={{ x: 0 }}
@@ -847,39 +1105,72 @@ export default function ChatUI({ isOpen, onClose, user }) {
                     </AnimatePresence>
 
                     {/* Main Chat Area */}
-                    <div className="flex-1 flex flex-col">
+                    <div className={`flex-1 flex flex-col min-w-0 ${isPlanChat ? "bg-emerald-50/30" : "bg-white"}`}>
                         {/* Header */}
-                        <div className="flex items-center justify-between p-6 border-b border-gray-200 bg-white">
-                            <div className="flex items-center gap-3">
-                                {!isSidebarOpen && (
+                        <div
+                            className={`flex items-center justify-between p-6 border-b ${
+                                isPlanChat
+                                    ? "border-emerald-200/60 bg-gradient-to-r from-emerald-50 to-teal-50/80"
+                                    : "border-gray-200 bg-white"
+                            }`}
+                        >
+                            <div className="flex items-center gap-3 min-w-0">
+                                {!isPlanChat && !isSidebarOpen && (
                                     <button
                                         onClick={() => setIsSidebarOpen(true)}
-                                        className="p-2 mr-2 rounded-lg text-gray-500 hover:bg-gray-200 transition-colors"
+                                        className="p-2 mr-2 rounded-lg text-gray-500 hover:bg-gray-200 transition-colors shrink-0"
                                     >
                                         <Menu className="h-5 w-5" />
                                     </button>
                                 )}
-                                <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-purple-600 rounded-xl flex items-center justify-center">
-                                    <ChatbotIcon className="h-5 w-5 text-white" />
-                                </div>
-                                <div>
-                                    <h2 className="text-lg font-semibold text-gray-800">UpNext AI Assistant</h2>
-                                    <p className="text-sm text-gray-500">Powered by Google Gemini</p>
-                                    {currentSessionId && (
-                                        <div className="text-xs text-blue-600 mt-1">
-                                            {pastChats.find(chat => chat.sessionId === currentSessionId)?.customName ? (
-                                                <span className="font-medium flex items-center gap-1">
-                                                    <Edit className="h-3 w-3" />
-                                                    {pastChats.find(chat => chat.sessionId === currentSessionId)?.customName}
-                                                </span>
-                                            ) : (
-                                                <span className="font-mono">
-                                                    Session: {currentSessionId.substring(0, 8)}...
-                                                </span>
+                                {isPlanChat ? (
+                                    <>
+                                        <div className="w-8 h-8 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-xl flex items-center justify-center shrink-0">
+                                            <ChatbotIcon className="h-5 w-5 text-white" />
+                                        </div>
+                                        <div className="min-w-0">
+                                            <h2 className="text-lg font-semibold text-emerald-950">
+                                                Plan coach
+                                            </h2>
+                                            <p className="text-xs text-emerald-800/70 truncate">
+                                                Thread for &quot;{scopedPlan?.goal}&quot; · not mixed with other chats
+                                            </p>
+                                        </div>
+                                    </>
+                                ) : (
+                                    <>
+                                        <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-purple-600 rounded-xl flex items-center justify-center shrink-0">
+                                            <ChatbotIcon className="h-5 w-5 text-white" />
+                                        </div>
+                                        <div className="min-w-0">
+                                            <h2 className="text-lg font-semibold text-gray-800">
+                                                UpNext AI Assistant
+                                            </h2>
+
+                                            {currentSessionId && (
+                                                <div className="text-xs text-blue-600 mt-1">
+                                                    {pastChats.find(
+                                                        (chat) => chat.sessionId === currentSessionId
+                                                    )?.customName ? (
+                                                        <span className="font-medium flex items-center gap-1">
+                                                            <Edit className="h-3 w-3" />
+                                                            {
+                                                                pastChats.find(
+                                                                    (chat) =>
+                                                                        chat.sessionId === currentSessionId
+                                                                )?.customName
+                                                            }
+                                                        </span>
+                                                    ) : (
+                                                        <span className="font-mono">
+                                                            Session: {currentSessionId.substring(0, 8)}...
+                                                        </span>
+                                                    )}
+                                                </div>
                                             )}
                                         </div>
-                                    )}
-                                </div>
+                                    </>
+                                )}
                             </div>
                             <button
                                 onClick={onClose}
@@ -890,7 +1181,11 @@ export default function ChatUI({ isOpen, onClose, user }) {
                         </div>
 
                         {/* Messages */}
-                        <div className="flex-1 overflow-y-auto p-6 bg-gray-50">
+                        <div
+                            className={`flex-1 overflow-y-auto p-6 ${
+                                isPlanChat ? "bg-emerald-50/25" : "bg-gray-50"
+                            }`}
+                        >
                             <div className="max-w-4xl mx-auto">
                                 {messages.length === 0 ? (
                                     <WelcomeMessage />
@@ -908,10 +1203,22 @@ export default function ChatUI({ isOpen, onClose, user }) {
                                         className="flex justify-start mb-4"
                                     >
                                         <div className="flex items-center gap-3">
-                                            <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center">
+                                            <div
+                                                className={`w-8 h-8 rounded-full flex items-center justify-center ${
+                                                    isPlanChat
+                                                        ? "bg-gradient-to-br from-emerald-500 to-teal-700"
+                                                        : "bg-gradient-to-br from-blue-500 to-purple-600"
+                                                }`}
+                                            >
                                                 <ChatbotIcon className="h-4 w-4 text-white" />
                                             </div>
-                                            <div className="bg-white border border-gray-200 rounded-2xl p-4 shadow-sm">
+                                            <div
+                                                className={`rounded-2xl p-4 shadow-sm ${
+                                                    isPlanChat
+                                                        ? "bg-white border border-emerald-100"
+                                                        : "bg-white border border-gray-200"
+                                                }`}
+                                            >
                                                 <div className="flex items-center gap-2">
                                                     <LoadingDots />
                                                     <span className="text-sm text-gray-600">Thinking...</span>
@@ -919,6 +1226,29 @@ export default function ChatUI({ isOpen, onClose, user }) {
                                             </div>
                                         </div>
                                     </motion.div>
+                                )}
+                                {pendingPlanChoice && !loading && (
+                                    <div className="max-w-4xl mx-auto mt-4 p-4 rounded-2xl border border-amber-200 bg-amber-50/90 shadow-sm">
+                                        <p className="text-sm font-medium text-amber-900 mb-3">
+                                            Similar plan exists: &quot;{pendingPlanChoice.conflict.existingGoal}&quot;. What should we do?
+                                        </p>
+                                        <div className="flex flex-wrap gap-2">
+                                            <button
+                                                type="button"
+                                                onClick={() => resolvePlanChoice("update_existing")}
+                                                className="px-4 py-2 rounded-xl bg-amber-700 text-white text-sm font-medium hover:bg-amber-800 transition-colors"
+                                            >
+                                                Update existing plan
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => resolvePlanChoice("create_new")}
+                                                className="px-4 py-2 rounded-xl bg-white border border-amber-300 text-amber-900 text-sm font-medium hover:bg-amber-100 transition-colors"
+                                            >
+                                                Create new plan
+                                            </button>
+                                        </div>
+                                    </div>
                                 )}
                                 <div ref={messagesEndRef} />
                             </div>
@@ -953,12 +1283,20 @@ export default function ChatUI({ isOpen, onClose, user }) {
                                     <div className="flex-1 relative">
                                         <textarea
                                             ref={inputRef}
-                                            className="w-full rounded-xl px-4 py-3 border border-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-gray-50 text-gray-800 placeholder:text-gray-400 transition-all duration-200 resize-none"
+                                            className={`w-full rounded-xl px-4 py-3 border focus:outline-none focus:ring-2 focus:border-transparent text-gray-800 placeholder:text-gray-400 transition-all duration-200 resize-none ${
+                                                isPlanChat
+                                                    ? "border-emerald-200/80 bg-white focus:ring-emerald-500"
+                                                    : "border-gray-200 bg-gray-50 focus:ring-blue-500"
+                                            }`}
                                             rows="1"
                                             value={input}
                                             onChange={handleInputChange}
                                             onKeyDown={handleKeyDown}
-                                            placeholder="Ask me anything... (Shift + Enter for new line)"
+                                            placeholder={
+                                                isPlanChat
+                                                    ? "Ask about this goal, money, or next steps… (Shift + Enter for new line)"
+                                                    : "Ask me anything... (Shift + Enter for new line)"
+                                            }
                                             disabled={loading}
                                             style={{ minHeight: '48px', maxHeight: '120px' }}
                                         />
@@ -971,7 +1309,11 @@ export default function ChatUI({ isOpen, onClose, user }) {
                                                 whileHover={{ scale: 1.05 }}
                                                 whileTap={{ scale: 0.95 }}
                                                 onClick={sendMessage}
-                                                className="absolute right-3 bottom-3 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-lg p-2 hover:shadow-lg transition-all duration-200"
+                                                className={`absolute right-3 bottom-3 text-white rounded-lg p-2 hover:shadow-lg transition-all duration-200 ${
+                                                    isPlanChat
+                                                        ? "bg-gradient-to-r from-emerald-600 to-teal-700"
+                                                        : "bg-gradient-to-r from-blue-600 to-purple-600"
+                                                }`}
                                                 disabled={loading}
                                             >
                                                 <Send className="h-5 w-5 -rotate-45" />
@@ -1002,6 +1344,7 @@ export default function ChatUI({ isOpen, onClose, user }) {
                     </div>
                 </motion.div>
             </motion.div>
-        </AnimatePresence>
+        </AnimatePresence>,
+        document.body
     );
 }

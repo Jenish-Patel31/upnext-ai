@@ -14,18 +14,16 @@ const api = axios.create({
 const apiCall = async (endpoint, options = {}) => {
   try {
     const url = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
-    
+    const { body, method = 'GET', ...axiosOptions } = options;
+
     const config = {
       url,
-      method: options.method || 'GET',
-      ...options,
+      method,
+      ...axiosOptions,
     };
 
-    // Handle body data properly
-    if (options.body && typeof options.body === 'object') {
-      config.data = options.body;
-    } else if (options.body) {
-      config.data = options.body;
+    if (body !== undefined) {
+      config.data = body;
     }
 
     const response = await api(config);
@@ -64,6 +62,20 @@ export const updateUser = async (uid, userData) => {
 export const deleteUser = async (uid) => {
   return apiCall(`users/${uid}`, {
     method: 'DELETE',
+  });
+};
+
+/** Ensures a MongoDB user row exists and name/email stay aligned with Firebase after login. */
+export const syncUserFromFirebase = async (firebaseUser) => {
+  if (!firebaseUser?.uid || !firebaseUser.email) return null;
+  const name =
+    firebaseUser.displayName?.trim() ||
+    firebaseUser.email.split('@')[0] ||
+    'User';
+  return createUser({
+    uid: firebaseUser.uid,
+    name,
+    email: firebaseUser.email,
   });
 };
 
@@ -174,16 +186,10 @@ export const updateChatSessionName = async (uid, sessionId, customName) => {
 };
 
 export const deleteChatSession = async (uid, sessionId) => {
-  try {
-    const response = await apiCall(`chat/session`, {
-      method: 'DELETE',
-      body: { uid, sessionId }
-    });
-    return response;
-  } catch (error) {
-    console.error('Failed to delete chat session:', error);
-    throw error;
-  }
+  return apiCall('chat/session/delete', {
+    method: 'POST',
+    body: { uid, sessionId },
+  });
 };
 
 // Expense Parsing APIs

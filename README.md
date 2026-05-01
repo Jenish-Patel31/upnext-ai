@@ -134,7 +134,7 @@ UpNext AI isn't just another financial app—it's a **revolutionary AI-powered f
 - Firebase project setup
 
 ### **Quick Start**
-```bash
+   ```bash
 # Clone the repository
 git clone https://github.com/Jenish-Patel31/upnext-ai.git
 cd upnext-ai
@@ -154,9 +154,9 @@ cd ../frontend && npm run dev
 
 ### **Environment Variables**
 ```env
-# Backend (.env)
-MONGODB_URI=your_mongodb_connection_string
-GEMINI_API_KEY=your_gemini_api_key
+   # Backend (.env)
+   MONGODB_URI=your_mongodb_connection_string
+   GEMINI_API_KEY=your_gemini_api_key
 FIREBASE_PROJECT_ID=your_firebase_project_id
 FIREBASE_PRIVATE_KEY=your_firebase_private_key
 FIREBASE_CLIENT_EMAIL=your_firebase_client_email

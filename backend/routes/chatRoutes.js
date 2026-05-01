@@ -17,7 +17,8 @@ router.post('/save', saveChat);
 // Update chat session name endpoint
 router.put('/session-name', updateChatSessionName);
 
-// Delete chat session endpoint
+// Delete chat session (POST preferred — many clients strip DELETE bodies)
+router.post('/session/delete', deleteChatSession);
 router.delete('/session', deleteChatSession);
 
 // Get chats by user (with auth)

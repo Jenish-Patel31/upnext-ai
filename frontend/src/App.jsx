@@ -12,6 +12,7 @@ import UserProfile from './components/UserProfile';
 import Expenses from './components/Expenses';
 import MyPlans from './components/MyPlans';
 import Navbar from './components/Navbar';
+import { syncUserFromFirebase } from './services/api';
 
 function RequireAuth({ children }) {
   const location = useLocation();
@@ -26,7 +27,9 @@ function App() {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       if (currentUser) {
         setUser(currentUser);
-        
+        syncUserFromFirebase(currentUser).catch((err) =>
+          console.error('Backend user sync failed:', err)
+        );
         if (!currentUser.emailVerified) {
           console.warn('Email not verified');
         }
